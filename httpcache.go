@@ -3,7 +3,6 @@
 //
 // It is only suitable for use as a 'private' cache (i.e. for a web-browser or an API-client
 // and not for a shared proxy).
-//
 package httpcache
 
 import (
@@ -103,12 +102,18 @@ type Transport struct {
 	Cache     Cache
 	// If true, responses returned from the cache will be given an extra header, X-From-Cache
 	MarkCachedResponses bool
+	// list of 'Vary' header values to ignore for cache validity
+	IgnoreVaryHeaderValues map[string]bool
 }
 
 // NewTransport returns a new Transport with the
 // provided Cache implementation and MarkCachedResponses set to true
 func NewTransport(c Cache) *Transport {
-	return &Transport{Cache: c, MarkCachedResponses: true}
+	return &Transport{
+		Cache:                  c,
+		MarkCachedResponses:    true,
+		IgnoreVaryHeaderValues: make(map[string]bool),
+	}
 }
 
 // Client returns an *http.Client that caches responses.
@@ -118,11 +123,16 @@ func (t *Transport) Client() *http.Client {
 
 // varyMatches will return false unless all of the cached values for the headers listed in Vary
 // match the new request
-func varyMatches(cachedResp *http.Response, req *http.Request) bool {
+func (t Transport) varyMatches(cachedResp *http.Response, req *http.Request) bool {
 	for _, header := range headerAllCommaSepValues(cachedResp.Header, "vary") {
 		header = http.CanonicalHeaderKey(header)
+
 		if header != "" && req.Header.Get(header) != cachedResp.Header.Get("X-Varied-"+header) {
-			return false
+			if ignore, ok := t.IgnoreVaryHeaderValues[header]; ok && ignore {
+				continue
+			} else {
+				return false
+			}
 		}
 	}
 	return true
@@ -157,7 +167,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			cachedResp.Header.Set(XFromCache, "1")
 		}
 
-		if varyMatches(cachedResp, req) {
+		if t.varyMatches(cachedResp, req) {
 			// Can only use cached value if the new request doesn't Vary significantly
 			freshness := getFreshness(cachedResp.Header, req.Header)
 			if freshness == fresh {
